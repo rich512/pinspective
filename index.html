@@ -135,6 +135,9 @@ textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);bo
 .sweep .dots{display:flex;gap:6px;margin:10px 0 2px}
 .sweep .dots b{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-size:12px;color:var(--mut)}
 .sweep .dots b.on{background:var(--green2);border-color:transparent;color:#000}
+.learn{position:fixed;left:10px;right:10px;top:calc(var(--st) + 100px);z-index:19;background:rgba(0,14,12,.93);border:1px solid rgba(111,214,64,.6);border-radius:14px;padding:9px 11px;font-size:13px;display:flex;gap:10px;align-items:center}
+.learn #lbText{flex:1;line-height:1.3}
+.lbBtns{display:flex;gap:6px;flex:none}
 #mapWrap{position:fixed;left:0;right:0;z-index:6;display:none;background:#0a1410}
 #map{position:absolute;inset:0}
 body.v-split #stage{bottom:auto;height:40%}
@@ -208,6 +211,8 @@ body.v-map .mbtns{top:calc(var(--st) + 60px)}
   <div class="mbtns"><button class="ib" id="mapOrient" aria-label="Hole up or north up"></button><button class="ib" id="mapMe" aria-label="Centre on me">◎</button><button class="ib" id="mapClear" aria-label="Clear target">✕</button></div>
   <div class="mcard" id="mapCard"></div>
 </div>
+
+<div id="learnBar" class="learn" hidden><div id="lbText"></div><div class="lbBtns"><button class="btn sm pri" id="lbGo">I'm at the pin</button><button class="btn sm" id="lbX" aria-label="Dismiss">✕</button></div></div>
 
 <div id="sideCtl">
   <button class="zb on" data-z="1">1×</button>
@@ -297,6 +302,10 @@ body.v-map .mbtns{top:calc(var(--st) + 60px)}
     <div class="row"><label><span id="sFlagL">Flagstick height</span><small>Visible height above the green. 7 ft (2.13 m) is common but 8 ft exists. This is the biggest single source of error.</small></label><input type="number" id="sFlag" step="0.1" inputmode="decimal"></div>
     <div class="row"><label>I've confirmed this course's flag height<small>Tightens the reported range</small></label><input type="checkbox" id="sFlagOk"></div>
     <div class="row"><label><span id="sCamHL">Phone height</span><small>Above the ground while aiming</small></label><input type="number" id="sCamH" step="0.1" inputmode="decimal"></div>
+  </div>
+  <div class="card">
+    <h3>Course tuning</h3>
+    <div id="ctBody" class="mut">—</div>
   </div>
   <div class="card">
     <h3>Camera & sensors</h3>
@@ -641,14 +650,17 @@ function solveFrame(s, fr, f, Hm) { // horizontal distance from angles to top an
   const X = Hm / den;
   return { X, dz: X * Math.tan(eB) + S.camH, span: yB - yT };
 }
-function measure(s, Hm = S.flagH, f = focalPx(s)) {
+function measure(s, Hm = S.flagH, f = focalPx(s), raw = false) {
   const rs = s.frames.map(fr => solveFrame(s, fr, f, Hm)).filter(Boolean);
   if (!rs.length) return null;
-  const X = median(rs.map(r => r.X)), dz = s.hasPitch ? median(rs.map(r => r.dz)) : null;
+  let X = median(rs.map(r => r.X)), dz = s.hasPitch ? median(rs.map(r => r.dz)) : null;
+  const rawX = X;
   const spans = rs.map(r => r.span), span = median(spans), n = rs.length;
   const sigPx = s.mode === "manual" ? .75 : Math.max(Math.sqrt(.6 ** 2 / n + .25 ** 2), sd(spans) / Math.sqrt(n));
   const relPx = sigPx / span, relCal = calib[s.key] ? .015 : .06, relH = S.flagOk ? .02 : .05;
-  const rel = Math.sqrt(relPx ** 2 + relCal ** 2 + relH ** 2);
+  const sc = raw ? { k: 1, sig: Math.sqrt(relCal ** 2 + relH ** 2), n: 0 } : scaleFor(s.key, relCal, relH);
+  X *= sc.k; if (dz != null) dz = (dz - S.camH) * sc.k + S.camH;
+  const rel = Math.sqrt(relPx ** 2 + sc.sig ** 2);
   const sigP = Math.sqrt((S.tiltCal ? .3 : 1) ** 2 + (s.pJit || 0) ** 2) * DEG;
   const sigDz = dz == null ? null : Math.sqrt((X * sigP) ** 2 + (dz * rel) ** 2);
   const los = Math.hypot(X, dz || 0), rel95 = 1.96 * rel;
@@ -656,13 +668,13 @@ function measure(s, Hm = S.flagH, f = focalPx(s)) {
   const cs = s.frames.map(f => f.c).filter(c => c != null), faint = s.mode === "auto" && cs.length && median(cs) < 2;
   if (faint) warn.push("Faint target: check lines");
   if (span < 12) warn.push("Pin tiny: zoom/telephoto");
-  if (!calib[s.key]) warn.push("Lens not calibrated");
-  if (!S.flagOk) warn.push("Flag height unconfirmed");
+  if (sc.n < 3 && !calib[s.key]) warn.push("Lens not calibrated");
+  if (sc.n < 3 && !S.flagOk) warn.push("Flag height unconfirmed");
   if (!s.hasPitch) warn.push("No tilt data");
   if (s.tilt > 6) warn.push(`Phone rolled ${Math.round(s.tilt)}°`);
   if (dz != null && Math.abs(Math.atan2(dz, X)) > 15 * DEG) warn.push("Slope looks implausible");
   return { X, dz, los, span, n, rel, rel95, sigX: X * rel, sigDz, slope: dz == null ? null : Math.atan2(dz, X) / DEG,
-    conf: faint ? 1 : rel95 <= .03 ? 3 : rel95 <= .07 ? 2 : 1, warn };
+    conf: faint ? 1 : rel95 <= .03 ? 3 : rel95 <= .07 ? 2 : 1, warn, rawX, relPx, k: sc.k, kn: sc.n, ksig: sc.sig };
 }
 function airDensity(tC, hPa, rh) {
   const T = tC + 273.15, es = 6.1078 * Math.pow(10, 7.5 * tC / (tC + 237.3)), pv = rh / 100 * es;
@@ -767,6 +779,7 @@ function renderStatus() {
   else w.textContent = wx ? `💨 ${Math.round(wx.spd)} ${cname(wx.dir)} · G${Math.round(wx.gust)}` : "💨 —";
   t.textContent = wx ? (isYd() ? `${Math.round(wx.tC * 1.8 + 32)}°F` : `${Math.round(wx.tC)}°C`) : "—°";
   if (S.tour) { st.textContent = "TOURNAMENT"; st.className = "chip tour"; }
+  else if (courseTuneInfo()) { st.textContent = courseTuneInfo(); st.className = "chip ok"; }
   else if (calib[camKey]) { st.textContent = "📷 Optical ✓"; st.className = "chip ok"; }
   else { st.textContent = "📷 Uncalibrated"; st.className = "chip warn"; }
 }
@@ -889,7 +902,7 @@ function refresh() {
   if (state !== "locked") return;
   const m = shot && shot.frames.length ? measure(shot) : null;
   renderPanel(m, shot, "locked");
-  if (m) pinFromCamera(m, shot);
+  if (m) { pinFromCamera(m, shot); queueCheck(m, shot); }
 }
 function draw() {
   if (!frame) return;
@@ -978,7 +991,7 @@ $("calSave").onclick = () => {
   const Hm = fromL(+$("calH").value), Dm = fromD(+$("calD").value);
   if (!(Hm > 0 && Dm > 0)) { $("calErr").textContent = "Enter both the height and the distance."; return; }
   let lo = 50, hi = 5e5;
-  for (let i = 0; i < 90; i++) { const f = Math.sqrt(lo * hi), m = measure(shot, Hm, f); if (!m || m.X < Dm) lo = f; else hi = f; }
+  for (let i = 0; i < 90; i++) { const f = Math.sqrt(lo * hi), m = measure(shot, Hm, f, true); if (!m || m.X < Dm) lo = f; else hi = f; }
   const fn = Math.sqrt(lo * hi) / (Math.max(shot.w, shot.h) * (shot.zoom || 1)), fov = 2 * Math.atan(.5 / fn) / DEG;
   if (fov < 5 || fov > 130) { $("calErr").textContent = `That implies a ${fov.toFixed(0)}° lens, which isn't plausible. Check the lines and numbers.`; return; }
   calib[shot.key] = fn; save("ps2_calib", calib); $("calModal").hidden = true; renderStatus(); renderCalInfo(); refresh();
@@ -1158,6 +1171,106 @@ function layoutView() {
 $("navView").onclick = () => { viewMode = viewMode === "cam" ? "split" : viewMode === "split" ? "map" : "cam"; layoutView(); renderCard(); };
 $("mapMe").onclick = () => { if (map && gps) map.setView(LL(gps), Math.max(map.getZoom(), 18)); };
 $("mapClear").onclick = clearTarget;
+
+
+// ================= course auto-tuning (camera vs GPS walk-off) =================
+// Every camera reading is followed (when you reach the green) by a GPS distance from where you
+// stood to the pin. Flagstick height and lens focal length multiply into one scale factor per
+// course + lens, so each pair of readings is a sample of that factor. A Bayesian blend starts
+// from the calibration prior (k = 1 ± calibration/flag uncertainty) and tightens with every sample.
+let courses = load("ps2_courses", []), pending = load("ps2_pending", null), lbMsgUntil = 0;
+const saveCourses = () => save("ps2_courses", courses);
+function activeCourse(create) {
+  if (!gps) return null;
+  let best = null, bd = 2500;
+  for (const c of courses) { const d = hav(gps, c); if (d < bd) { bd = d; best = c; } }
+  if (!best && create) { best = { id: Date.now().toString(36), name: `Course ${courses.length + 1}`, lat: gps.lat, lon: gps.lon, samples: [], flagH: S.flagH, flagOk: S.flagOk }; courses.push(best); saveCourses(); }
+  return best;
+}
+function scaleFor(key, relCal, relH) {
+  const c = activeCourse(false), s0 = Math.sqrt(relCal ** 2 + relH ** 2);
+  let num = 1 / s0 ** 2, den = 1 / s0 ** 2, n = 0;
+  if (c) {
+    const fnNow = calib[key] || DEFAULT_FNORM;
+    const rs = c.samples.filter(q => q.key === key).map(q => ({ r: q.gps / (q.cam * (S.flagH / q.H) * (fnNow / q.fn)), v: q.relGps ** 2 + q.relPx ** 2 }));
+    const med = median(rs.map(x => x.r));
+    for (const x of rs) {
+      if (rs.length >= 4 && Math.abs(x.r - med) > Math.max(.05, 3 * Math.sqrt(x.v))) continue; // outlier: wrong pin, bad GPS
+      num += x.r / x.v; den += 1 / x.v; n++;
+    }
+  }
+  return { k: num / den, sig: 1 / Math.sqrt(den), n, course: c };
+}
+function courseTuneInfo() {
+  const c = activeCourse(false); if (!c) return null;
+  const sc = scaleFor(camKey, calib[camKey] ? .015 : .06, S.flagOk ? .02 : .05);
+  return sc.n ? `⛳ Tuned ±${(196 * sc.sig).toFixed(1)}%` : null;
+}
+function courseFlagSave() { const c = activeCourse(false); if (c) { c.flagH = S.flagH; c.flagOk = S.flagOk; saveCourses(); } }
+let lastCourseId = null;
+setInterval(() => { // switching courses: load that course's flagstick height
+  const c = activeCourse(false); if (!c || c.id === lastCourseId) return;
+  lastCourseId = c.id; if (c.flagH) { S.flagH = c.flagH; S.flagOk = !!c.flagOk; saveS(); } renderStatus();
+}, 3000);
+function queueCheck(m, s) {
+  if (!gps) return;
+  const r = measure(s, S.flagH, focalPx(s), true); if (!r) return;
+  pending = { from: { lat: gps.lat, lon: gps.lon, acc: gps.acc }, cam: r.X, H: S.flagH, fn: calib[s.key] || DEFAULT_FNORM, key: s.key, relPx: r.relPx, t: Date.now() };
+  save("ps2_pending", pending); renderLearn();
+}
+function renderLearn() {
+  const bar = $("learnBar");
+  if (!$("v-bag").hidden || !$("v-test").hidden || !$("v-set").hidden || !$("start").hidden) { bar.hidden = true; return; }
+  if (Date.now() < lbMsgUntil) { bar.hidden = false; return; }
+  if (!pending || Date.now() - pending.t > 30 * 60e3 || state !== "live") { bar.hidden = true; return; }
+  bar.hidden = false; $("lbGo").hidden = false; $("lbGo").disabled = false;
+  const walked = gps ? hav(gps, pending.from) : 0;
+  $("lbText").innerHTML = walked < 20
+    ? `<b>Tune accuracy:</b> after your shot, walk to this pin and tap <b>I'm at the pin</b> when you're beside the flag.`
+    : `Beside the flag? Tap <b>I'm at the pin</b> (${fD(walked)} ${dU()} walked).`;
+}
+setInterval(renderLearn, 1500);
+$("lbX").onclick = () => { pending = null; save("ps2_pending", null); lbMsgUntil = 0; $("learnBar").hidden = true; };
+function lbSay(html, ms) { lbMsgUntil = Date.now() + (ms || 7000); renderLearn(); $("learnBar").hidden = !$("v-set").hidden; $("lbText").innerHTML = html; $("lbGo").hidden = true; }
+$("lbGo").onclick = () => {
+  if (!pending || !gps) return;
+  $("lbGo").disabled = true;
+  const fixes = [], t0 = Date.now();
+  const tick = setInterval(() => {
+    fixes.push({ ...gps });
+    $("lbText").innerHTML = `Hold still beside the flag… ${Math.max(0, 5 - Math.floor((Date.now() - t0) / 1000))}`;
+    if (Date.now() - t0 < 5000) return;
+    clearInterval(tick);
+    const at = { lat: mean(fixes.map(f => f.lat)), lon: mean(fixes.map(f => f.lon)) }, acc = mean(fixes.map(f => f.acc));
+    const d = hav(pending.from, at), r = d / pending.cam, relGps = Math.sqrt(pending.from.acc ** 2 + acc ** 2) * .6 / d;
+    const say = `Camera said <b>${fD(pending.cam)}</b>, GPS walk says <b>${fD(d)} ${dU()}</b>.`;
+    if (d < 45) return lbSay(`${say} Too short to tune from: GPS error is too large under about 50 yd. Not saved.`);
+    if (r < .75 || r > 1.33) return lbSay(`${say} Those don't match. Was this the same pin? Not saved.`);
+    if (relGps > .06) return lbSay(`${say} GPS is too weak right now (±${fD(acc)} ${dU()}). Not saved.`);
+    const c = activeCourse(true);
+    c.samples.push({ cam: pending.cam, gps: d, H: pending.H, fn: pending.fn, key: pending.key, relGps, relPx: pending.relPx, t: Date.now() });
+    c.samples = c.samples.slice(-60); saveCourses();
+    pending = null; save("ps2_pending", null);
+    const sc = scaleFor(camKey, calib[camKey] ? .015 : .06, S.flagOk ? .02 : .05);
+    lbSay(`<b>Tuned ✓</b> ${say} ${c.name}: ${sc.n} sample${sc.n === 1 ? "" : "s"}, correction ${((sc.k - 1) * 100).toFixed(1)}%, now ±${(196 * sc.sig).toFixed(1)}%.`, 9000);
+    renderStatus();
+  }, 1000);
+};
+function renderCourseCard() {
+  const el = $("ctBody"), c = activeCourse(false);
+  if (!c) { el.innerHTML = "No course yet. The first time you range a pin and walk to it on a course, PinSpective creates one here and starts tuning to its flagsticks and your lens."; return; }
+  const sc = scaleFor(camKey, calib[camKey] ? .015 : .06, S.flagOk ? .02 : .05);
+  const mine = c.samples.filter(q => q.key === camKey);
+  el.innerHTML = `<div class="row"><label>Course name</label><input type="text" id="ctName" value="${c.name.replace(/"/g, "&quot;")}" style="width:160px;background:#000;border:1px solid var(--line);border-radius:10px;padding:8px;color:#fff"></div>
+    <div class="row"><label>Samples on this lens<small>A sample = a camera reading plus a GPS walk to that pin</small></label><b>${sc.n}${mine.length > sc.n ? ` <span class="mut">(${mine.length - sc.n} ignored)</span>` : ""}</b></div>
+    <div class="row"><label>Correction<small>Combined flagstick height + lens error found so far</small></label><b>${((sc.k - 1) * 100).toFixed(1)}%</b></div>
+    <div class="row"><label>Accuracy (95%)<small>Scale part only; long shots also add pixel error</small></label><b>±${(196 * sc.sig).toFixed(1)}%</b></div>
+    ${mine.length ? `<div class="mut" style="margin-top:6px">Last: ${mine.slice(-5).reverse().map(q => `${fD(q.cam * (S.flagH / q.H) * ((calib[camKey] || DEFAULT_FNORM) / q.fn))}→${fD(q.gps)}`).join(" · ")} ${dU()}</div>` : ""}
+    <div class="btnrow"><button class="btn sm" id="ctReset">Reset this course</button></div>
+    <p class="mut" style="margin-bottom:0">Expect about ±3–4% after 3 samples and about ±1.5% after 15–20. GPS is only used to check the camera; it never replaces the camera reading.</p>`;
+  $("ctName").onchange = e => { c.name = e.target.value || c.name; saveCourses(); };
+  $("ctReset").onclick = e => { if (e.target.dataset.sure) { c.samples = []; saveCourses(); renderCourseCard(); renderStatus(); } else { e.target.dataset.sure = 1; e.target.textContent = "Tap again to reset"; } };
+}
 
 // ================= quick lens calibration (tilt sweep) =================
 // Hold a distant point in the crosshair, then tilt the phone in steps. The point's movement
@@ -1353,7 +1466,7 @@ const sheets = { bag: "v-bag", test: "v-test", set: "v-set" };
 function openSheet(k) {
   Object.entries(sheets).forEach(([n, id]) => $(id).hidden = n !== k);
   ["navBag", "navTest", "navSet"].forEach(id => $(id).classList.toggle("on", id === "nav" + k[0].toUpperCase() + k.slice(1)));
-  if (k === "bag") renderClubs(); if (k === "test") renderTest(); if (k === "set") renderSettings();
+  if (k === "bag") renderClubs(); if (k === "test") renderTest(); if (k === "set") { renderSettings(); renderCourseCard(); }
 }
 function closeSheets() { Object.values(sheets).forEach(id => $(id).hidden = true); ["navBag", "navTest", "navSet"].forEach(id => $(id).classList.remove("on")); renderStatus(); refresh(); }
 $("navBag").onclick = () => $("v-bag").hidden ? openSheet("bag") : closeSheets();
@@ -1385,8 +1498,8 @@ function renderSettings() {
   renderCalInfo();
 }
 const bind = (id, fn) => $(id).addEventListener("change", e => { fn(e.target); saveS(); renderSettings(); });
-bind("sTour", t => S.tour = t.checked); bind("sFlagOk", t => S.flagOk = t.checked);
-bind("sFlag", t => { const v = fromL(+t.value); if (v > .3) S.flagH = v; });
+bind("sTour", t => S.tour = t.checked); bind("sFlagOk", t => { S.flagOk = t.checked; courseFlagSave(); });
+bind("sFlag", t => { const v = fromL(+t.value); if (v > .3) S.flagH = v; courseFlagSave(); });
 bind("sCamH", t => { const v = fromL(+t.value); if (v >= 0) S.camH = v; });
 bind("sHome", t => S.homeElev = fromL(+t.value || 0));
 bind("sUseSlope", t => S.useSlope = t.checked); bind("sUseWind", t => S.useWind = t.checked); bind("sUseAir", t => S.useAir = t.checked);

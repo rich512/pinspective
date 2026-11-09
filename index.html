@@ -176,6 +176,7 @@ body.v-map .mbtns{top:calc(var(--st) + 60px)}
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet-rotate@0.5.4/dist/leaflet-rotate.js" crossorigin=""></script>
 </head>
 <body>
 
@@ -204,7 +205,7 @@ body.v-map .mbtns{top:calc(var(--st) + 60px)}
 </header>
 
 <div id="mapWrap"><div id="map"></div>
-  <div class="mbtns"><button class="ib" id="mapMe" aria-label="Centre on me">◎</button><button class="ib" id="mapClear" aria-label="Clear target">✕</button></div>
+  <div class="mbtns"><button class="ib" id="mapOrient" aria-label="Hole up or north up"></button><button class="ib" id="mapMe" aria-label="Centre on me">◎</button><button class="ib" id="mapClear" aria-label="Clear target">✕</button></div>
   <div class="mcard" id="mapCard"></div>
 </div>
 
@@ -417,7 +418,7 @@ const DEFAULT_CLUBS = [["Driver",250],["3 Wood",225],["5 Wood",210],["4 Hybrid",
 const S = load("ps2_settings", {
   units: "yd", tour: false, flagH: 2.1336, flagOk: false, camH: 1.4,
   useSlope: true, upF: 1.0, downF: 1.0, useWind: true, useAir: true, homeElev: 0,
-  windMode: "auto", manSpd: 0, manClk: 12, deviceId: "", burst: 7, tiltBias: 0, tiltCal: false
+  windMode: "auto", manSpd: 0, manClk: 12, mapOrient: "hole", deviceId: "", burst: 7, tiltBias: 0, tiltCal: false
 });
 let calib = load("ps2_calib", {});
 let clubs = load("ps2_clubs", DEFAULT_CLUBS);
@@ -1016,11 +1017,11 @@ function divI(html, size) { return L.divIcon({ className: "", html, iconSize: si
 function ensureMap() {
   if (map) { map.invalidateSize(); return true; }
   if (typeof L === "undefined") { $("mapCard").innerHTML = "The map couldn't load. Check your connection and reopen the app."; return false; }
-  map = L.map("map", { zoomControl: false, attributionControl: true, maxZoom: 21 }).setView(gps ? LL(gps) : [43.65, -79.38], gps ? 18 : 15);
+  map = L.map("map", { zoomControl: false, attributionControl: true, maxZoom: 21, rotate: true, bearing: 0, touchRotate: true, rotateControl: false, shiftKeyRotate: false }).setView(gps ? LL(gps) : [43.65, -79.38], gps ? 18 : 15);
   L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
     maxZoom: 21, maxNativeZoom: 19, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }).addTo(map);
   map.on("click", e => { setTarget({ lat: e.latlng.lat, lon: e.latlng.lng }, "map"); });
-  drawYou(); drawPin(); drawTarget();
+  map.on("rotate", updateNeedle); drawYou(); drawPin(); drawTarget(); orientMap(true); updateNeedle();
   return true;
 }
 function drawYou() {
@@ -1030,7 +1031,7 @@ function drawYou() {
   else { ML.you.setLatLng(LL(gps)); ML.acc.setLatLng(LL(gps)).setRadius(gps.acc); }
 }
 setInterval(() => { if (viewMode === "split") document.body.style.setProperty("--pc", $("panel").offsetHeight + "px"); }, 400);
-setInterval(() => { const a = document.getElementById("youArrow"); if (a && heading != null) { a.style.display = ""; a.style.transform = `rotate(${heading}deg)`; } }, 300);
+setInterval(() => { const a = document.getElementById("youArrow"); if (a && heading != null) { a.style.display = ""; a.style.transform = `rotate(${heading + (map && map.getBearing ? map.getBearing() : 0)}deg)`; } }, 300);
 function pinFromCamera(m, s) {
   if (!gps) return;
   const f = focalPx(s), xs = s.frames.map(fr => fr.x).filter(x => x != null);
@@ -1038,7 +1039,7 @@ function pinFromCamera(m, s) {
   const keep = pinGeo && pinGeo.shotRef === s && pinGeo.userB;
   pinGeo = { from: keep ? pinGeo.from : { lat: gps.lat, lon: gps.lon }, d: m.X, b: keep ? pinGeo.b : (s.heading != null ? (s.heading + xoff + 360) % 360 : 0),
     userB: keep, guessed: !keep && s.heading == null, shotRef: s };
-  if (map) { drawPin(); drawTarget(); }
+  if (map) { drawPin(); drawTarget(); if (!keep) orientMap(true); }
 }
 function pinPos() { return pinGeo ? dest(pinGeo.from, pinGeo.b, pinGeo.d) : null; }
 function drawPin() {
@@ -1051,9 +1052,9 @@ function drawPin() {
   ML.pin = L.marker(LL(pinPos()), { icon, draggable: true, zIndexOffset: 900 }).addTo(map);
   ML.pin.bindTooltip(`Pin ${fD(pinGeo.d)} ${dU()} · camera${pinGeo.guessed ? " · drag onto the green" : ""}`, { direction: "top", offset: [0, -34], permanent: true, className: "" });
   ML.pin.on("drag", e => { const ll = e.target.getLatLng(); pinGeo.b = brg(pinGeo.from, { lat: ll.lat, lon: ll.lng }); pinGeo.userB = true; pinGeo.guessed = false; e.target.setLatLng(LL(pinPos())); drawTarget(true); });
-  ML.pin.on("dragend", () => { drawPin(); drawTarget(); });
+  ML.pin.on("dragend", () => { drawPin(); drawTarget(); orientMap(false); });
 }
-function setTarget(p, src, note) { tgt = { lat: p.lat, lon: p.lon, src, note }; if (src === "map") clearRay(true); drawTarget(); fetchElev(); }
+function setTarget(p, src, note) { const first = !tgt && !pinGeo; tgt = { lat: p.lat, lon: p.lon, src, note }; if (src === "map") clearRay(true); drawTarget(); fetchElev(); if (first && src !== "map") orientMap(true); }
 function clearTarget() { tgt = null; clearRay(); drawTarget(); }
 function clearRay(keepInfo) { if (ML.ray) { map && map.removeLayer(ML.ray); ML.ray = null; } if (!keepInfo) rayInfo = null; }
 function lbl(a, b, text) { const mid = { lat: (a.lat + b.lat) / 2, lon: (a.lon + b.lon) / 2 }; return L.marker(LL(mid), { icon: L.divIcon({ className: "", html: `<span class="lbl-d">${text}</span>`, iconSize: [0, 0] }), interactive: false }); }
@@ -1118,10 +1119,40 @@ function cameraTapToMap(p, mp) {
     setTarget(dest(gps, b, d), "camera", "Rough estimate from the camera angle, assuming flat ground (±20% or worse beyond 40 yd). Tap the exact spot along the dotted line on the map.");
   } else { rayInfo = "Aim line drawn from your camera tap. Tap the exact spot along the dotted line on the map."; tgt = null; drawTarget(); }
 }
+
+// ---- hole-up orientation: the line from you to the pin (or target) points straight up ----
+function holeBearing() {
+  if (!gps) return null;
+  const pp = pinPos(); if (pp && hav(gps, pp) > 15) return brg(gps, pp);
+  if (tgt && hav(gps, tgt) > 15) return brg(gps, tgt);
+  return heading;
+}
+function orientMap(fit) {
+  if (!map || !map.setBearing) return;
+  if (S.mapOrient === "north") { map.setBearing(0); updateNeedle(); return; }
+  const b = holeBearing(); if (b == null) return;
+  map.setBearing(-b); // leaflet-rotate turns the map clockwise for +bearing; -b puts the hole at 12 o'clock
+  const pp = pinPos() || tgt;
+  if (fit && gps && pp) {
+    const d = Math.max(30, hav(gps, pp)), hAvail = Math.max(160, map.getSize().y - 150);
+    const z = Math.log2(156543.03 * Math.cos(gps.lat * DEG) * hAvail * .78 / d);
+    map.setView(LL(dest(gps, b, d * .5)), Math.max(14, Math.min(20, z)), { animate: false });
+  }
+  updateNeedle();
+}
+function updateNeedle() {
+  const btn = $("mapOrient"); if (!btn) return;
+  const r = map && map.getBearing ? map.getBearing() : 0;
+  btn.innerHTML = S.mapOrient === "north" ? '<span style="font-size:12px;font-weight:800">N↑</span>'
+    : `<svg viewBox="0 0 24 24" width="22" height="22" style="transform:rotate(${r}deg)"><path d="M12 2L16 12H8Z" fill="#ff5b4f"/><path d="M12 22L8 12H16Z" fill="#fff"/></svg>`;
+  btn.title = S.mapOrient === "north" ? "North up: tap for hole up" : "Hole up: tap for north up";
+}
+$("mapOrient").onclick = () => { S.mapOrient = S.mapOrient === "north" ? "hole" : "north"; saveS(); orientMap(true); };
+
 function layoutView() {
   document.body.classList.toggle("v-split", viewMode === "split"); document.body.classList.toggle("v-map", viewMode === "map");
   $("navView").textContent = viewMode === "cam" ? "◫" : viewMode === "split" ? "🗺" : "📷";
-  if (viewMode !== "cam") { document.body.style.setProperty("--pc", $("panel").offsetHeight + "px"); ensureMap(); setTimeout(() => map && map.invalidateSize(), 60); }
+  if (viewMode !== "cam") { document.body.style.setProperty("--pc", $("panel").offsetHeight + "px"); ensureMap(); setTimeout(() => { if (map) { map.invalidateSize(); orientMap(true); } }, 60); }
   sizeOv(); placeHz(); if (frame) { sizeCv(); draw(); }
 }
 $("navView").onclick = () => { viewMode = viewMode === "cam" ? "split" : viewMode === "split" ? "map" : "cam"; layoutView(); renderCard(); };

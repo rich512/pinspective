@@ -1003,11 +1003,11 @@ function swOpen() {
   if (!video.videoWidth) { alertMsg("Start the camera first."); return; }
   if (!sensorsOK) { alertMsg("The tilt sensor isn't active. Restart the app and allow motion access."); return; }
   SW.on = false; SW.pts = []; state = "sweep";
-  $("sweep").hidden = false; $("swGo").textContent = "Start"; $("swGo").disabled = false;
+  $("panel").hidden = true; $("retLabel").hidden = true; $("sweep").hidden = false; $("swGo").textContent = "Start"; $("swGo").disabled = false;
   swUI("Aim the crosshair at a small, sharp point at least <b>20 m (65 ft) away</b>: a window corner, a sign or a lamp post. Through a window is fine. Hold the phone upright, then tap <b>Start</b>.", 0);
 }
-function alertMsg(t) { $("sweep").hidden = false; $("swGo").disabled = true; swUI(t, 0); state = "sweep"; }
-function swClose() { SW.on = false; $("sweep").hidden = true; state = "live"; liveSeed = null; }
+function alertMsg(t) { $("panel").hidden = true; $("sweep").hidden = false; $("swGo").disabled = true; swUI(t, 0); state = "sweep"; }
+function swClose() { SW.on = false; $("sweep").hidden = true; $("panel").hidden = false; $("retLabel").hidden = false; state = "live"; liveSeed = null; const d = devicePixelRatio || 1; octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, innerWidth, innerHeight); }
 $("sQuickCal").onclick = swOpen;
 $("swCancel").onclick = swClose;
 $("swGo").onclick = () => {

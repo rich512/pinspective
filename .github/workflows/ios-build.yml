@@ -1,0 +1,20 @@
+name: iOS build check
+on:
+  push:
+    paths: ["ios/**", ".github/workflows/ios-build.yml"]
+  pull_request:
+    paths: ["ios/**"]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode version
+        run: xcodebuild -version
+      - name: Build for iPhone (unsigned)
+        run: |
+          xcodebuild -project ios/PinSpective.xcodeproj -target PinSpective \
+            -sdk iphoneos -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | tail -n 80
+          test ${PIPESTATUS[0]} -eq 0

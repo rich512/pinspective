@@ -128,6 +128,13 @@ table.t th{color:var(--mut);font-weight:700;font-size:11px}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;display:flex;align-items:flex-end}
 .modal .card{width:100%;margin:0;border-radius:20px 20px 0 0;padding-bottom:calc(var(--sb) + 18px);max-height:88vh;overflow:auto;-webkit-user-select:text;user-select:text}
 textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);border-radius:10px;padding:8px;font:12px ui-monospace,Menlo,monospace}
+.sweep{position:fixed;left:0;right:0;bottom:0;z-index:30;padding:14px 14px calc(var(--sb) + 14px);background:rgba(0,14,12,.96);border-top:1px solid var(--line)}
+.sweep .msg{font-size:15px;margin:6px 0 10px;line-height:1.35}
+.sweep .bar{height:8px;border-radius:4px;background:#1d2a24;overflow:hidden}
+.sweep .bar i{display:block;height:100%;width:0;background:var(--green2);transition:width .2s}
+.sweep .dots{display:flex;gap:6px;margin:10px 0 2px}
+.sweep .dots b{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-size:12px;color:var(--mut)}
+.sweep .dots b.on{background:var(--green2);border-color:transparent;color:#000}
 #rotate{display:none;position:fixed;inset:0;z-index:99;background:var(--bg);align-items:center;justify-content:center;text-align:center;padding:30px;font-size:18px}
 @media (orientation:landscape) and (max-height:520px){#rotate{display:flex}}
 </style>
@@ -250,6 +257,7 @@ textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);bo
     <h3>Camera & sensors</h3>
     <div class="row"><label>Lens<small>On iPhone, choose "Back Telephoto Camera" for long shots, then calibrate it.</small></label><select id="sCam"><option value="">Default rear camera</option></select></div>
     <div class="row"><label>Lens calibration<small id="sCalInfo">—</small></label><button class="btn sm" id="sCalReset">Reset</button></div>
+    <div class="row"><label>Quick calibrate<small>No tape measure needed: hold the crosshair on a distant point and tilt the phone in a few steps. Works through a window or outdoors.</small></label><button class="btn sm pri" id="sQuickCal">Start</button></div>
     <div class="row"><label>Tilt sensor calibration<small id="sTiltInfo">—</small></label><button class="btn sm" id="sTiltBtn">Calibrate</button></div>
     <div class="row"><label>Frames per measurement<small>More frames = steadier, slower</small></label><select id="sBurst"><option>3</option><option>5</option><option>7</option><option>9</option></select></div>
   </div>
@@ -284,7 +292,7 @@ textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);bo
 <!-- MODALS -->
 <div id="calModal" class="modal" hidden><div class="card">
   <h3>Calibrate this lens</h3>
-  <div class="mut">Measure an object of known height at a known horizontal distance (a pin at a measured yardage, or confirm with a laser). The app works out the lens focal length from it. Repeat at 2–3 distances for best results; each save replaces the last.</div>
+  <div class="mut">Measure an object of known height at a known horizontal distance (a pin at a measured yardage, or confirm with a laser). The app works out the lens focal length from it. Each save replaces the last. No tape measure? Use <b style="color:#fff">Quick calibrate</b> in Settings instead.</div>
   <div class="row"><label>Object height (<span id="calHU">ft</span>)</label><input type="number" id="calH" step="0.1" inputmode="decimal"></div>
   <div class="row"><label>True distance (<span id="calDU">yd</span>)</label><input type="number" id="calD" step="1" inputmode="decimal"></div>
   <div class="err" id="calErr"></div>
@@ -316,7 +324,7 @@ textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);bo
     <li>Check the red and blue lines on the frozen frame. Drag them if needed (pinch to zoom).</li>
     <li>Read the actual distance (measured), the slope and wind adjustments (estimates) and the plays-like number with its range.</li>
   </ol>
-  <p class="mut">Before your first round: calibrate the lens (Calibrate button, after measuring a pin at a known distance) and the tilt sensor (Settings).</p>
+  <p class="mut">Before your first round: calibrate the tilt sensor, then the lens. Both are in ⚙ Settings. <b style="color:#fff">Quick calibrate</b> needs no tape measure, just a distant point to aim at.</p>
   <div class="btnrow"><button class="btn pri" data-x>Got it</button></div>
 </div></div>
 
@@ -334,6 +342,14 @@ textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);bo
   <div class="mut" style="margin-top:10px">Allow camera, motion and location (location is only used for weather).</div>
   <div class="err" id="startErr"></div>
 </section>
+
+<div id="sweep" class="sweep" hidden>
+  <div class="k">Quick lens calibration</div>
+  <div class="msg" id="swMsg"></div>
+  <div class="bar"><i id="swBar"></i></div>
+  <div class="dots" id="swDots"><b>1</b><b>2</b><b>3</b><b>4</b><b>5</b></div>
+  <div class="actions"><button class="btn" id="swCancel" style="flex:1">Cancel</button><button class="btn pri" id="swGo" style="flex:2">Start</button></div>
+</div>
 
 <div id="rotate">Turn your phone upright (portrait) to use the rangefinder.</div>
 
@@ -920,6 +936,127 @@ function renderCalInfo() {
   $("sTiltInfo").textContent = S.tiltCal ? `Calibrated: bias ${S.tiltBias.toFixed(2)}°` : "Not calibrated (±1° assumed)";
 }
 $("sCalReset").onclick = () => { delete calib[camKey]; save("ps2_calib", calib); renderCalInfo(); renderStatus(); };
+
+
+// ================= quick lens calibration (tilt sweep) =================
+// Hold a distant point in the crosshair, then tilt the phone in steps. The point's movement
+// in pixels against the tilt sensor's change in angle gives the focal length:
+//   y = cy - f * tan(e - p)   (e = the point's elevation, p = camera pitch). Fit f and e.
+// Points are captured only while the phone is still, so sensor/frame timing lag can't bias them.
+const SW = { on: false, src: null, k: .5, T: null, Tm: 0, Ts: 1, x: 0, y: 0, pts: [], lost: 0, w: 0, h: 0, ylog: [] };
+const swCv = document.createElement("canvas"), swCtx = swCv.getContext("2d", { willReadFrequently: true });
+const TW = 48; // template size in scaled px (96 image px at k = .5)
+function swGrab(cx, cy, hw, hh) {
+  const k = SW.k, x0 = Math.round(Math.min(Math.max(cx - hw, 0), SW.w - 2 * hw)), y0 = Math.round(Math.min(Math.max(cy - hh, 0), SW.h - 2 * hh));
+  const W = Math.round(2 * hw * k), H = Math.round(2 * hh * k);
+  swCv.width = W; swCv.height = H; swCtx.drawImage(SW.src, x0, y0, 2 * hw, 2 * hh, 0, 0, W, H);
+  const d = swCtx.getImageData(0, 0, W, H).data, g = new Float32Array(W * H);
+  for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = .299 * d[j] + .587 * d[j + 1] + .114 * d[j + 2];
+  return { g, W, H, x0, y0 };
+}
+function swTemplate(cx, cy) {
+  const r = swGrab(cx, cy, TW / SW.k / 2, TW / SW.k / 2);
+  let m = 0; for (const v of r.g) m += v; m /= r.g.length;
+  let s2 = 0; const T = new Float32Array(r.g.length); for (let i = 0; i < T.length; i++) { T[i] = r.g[i] - m; s2 += T[i] * T[i]; }
+  return { T, sd: Math.sqrt(s2 / T.length), norm: Math.sqrt(s2) };
+}
+function swTrack() { // NCC search around the last position; returns {x, y, s} in image px
+  const k = SW.k, hw = (TW / 2 + 24) / k, hh = (TW / 2 + 40) / k;
+  const r = swGrab(SW.x, SW.y, hw, hh), W = r.W, H = r.H, g = r.g, n = TW * TW;
+  const I = new Float64Array((W + 1) * (H + 1)), I2 = new Float64Array((W + 1) * (H + 1));
+  for (let y = 0; y < H; y++) { let a = 0, b = 0; for (let x = 0; x < W; x++) { const v = g[y * W + x]; a += v; b += v * v;
+    I[(y + 1) * (W + 1) + x + 1] = I[y * (W + 1) + x + 1] + a; I2[(y + 1) * (W + 1) + x + 1] = I2[y * (W + 1) + x + 1] + b; } }
+  const S = (A, x, y) => A[(y + TW) * (W + 1) + x + TW] - A[y * (W + 1) + x + TW] - A[(y + TW) * (W + 1) + x] + A[y * (W + 1) + x];
+  const nx = W - TW + 1, ny = H - TW + 1, sc = new Float32Array(nx * ny); let best = -2, bx = 0, by = 0;
+  for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
+    let c = 0; for (let ty = 0; ty < TW; ty++) { const o = (y + ty) * W + x, to = ty * TW; for (let tx = 0; tx < TW; tx++) c += g[o + tx] * SW.T[to + tx]; }
+    const sum = S(I, x, y), v = S(I2, x, y) - sum * sum / n, sv = Math.sqrt(Math.max(v, 1e-6));
+    const ncc = c / (sv * SW.Tn); sc[y * nx + x] = ncc; if (ncc > best) { best = ncc; bx = x; by = y; }
+  }
+  const sub = (a, b, c) => { const d = a - 2 * b + c; return d < 0 ? Math.max(-.5, Math.min(.5, .5 * (a - c) / d)) : 0; };
+  const fx = bx > 0 && bx < nx - 1 ? sub(sc[by * nx + bx - 1], best, sc[by * nx + bx + 1]) : 0;
+  const fy = by > 0 && by < ny - 1 ? sub(sc[(by - 1) * nx + bx], best, sc[(by + 1) * nx + bx]) : 0;
+  return { x: r.x0 + (bx + fx + TW / 2) / k, y: r.y0 + (by + fy + TW / 2) / k, s: best };
+}
+function swFit(pts, cy, f0) {
+  let f = f0, e = pts[0].p;
+  for (let it = 0; it < 40; it++) {
+    let a = 0, b = 0, c = 0, g1 = 0, g2 = 0;
+    for (const q of pts) { const t = Math.tan((e - q.p) * DEG), J1 = t, J2 = f * (1 + t * t) * DEG, r = q.y - (cy - f * t);
+      a += J1 * J1; b += J1 * J2; c += J2 * J2; g1 += J1 * r; g2 += J2 * r; }
+    const det = a * c - b * b; if (Math.abs(det) < 1e-12) break;
+    const df = -(c * g1 - b * g2) / det, de = -(a * g2 - b * g1) / det; // r = y - model; model = cy - f t → dr/df = t
+    f += df; e += de; if (Math.abs(df) < 1e-3 && Math.abs(de) < 1e-7) break;
+  }
+  let ss = 0, a = 0, b = 0, c = 0;
+  for (const q of pts) { const t = Math.tan((e - q.p) * DEG), r = q.y - (cy - f * t); ss += r * r; const J2 = f * (1 + t * t) * DEG; a += t * t; b += t * J2; c += J2 * J2; }
+  const dof = Math.max(1, pts.length - 2), rms = Math.sqrt(ss / dof), det = a * c - b * b;
+  const sigF = det > 0 ? rms * Math.sqrt(c / det) : Infinity;
+  return { f, e, rms, rel: sigF / f };
+}
+function swUI(msg, prog) {
+  $("swMsg").innerHTML = msg; if (prog != null) $("swBar").style.width = Math.round(100 * Math.min(1, prog)) + "%";
+  [...$("swDots").children].forEach((d, i) => d.classList.toggle("on", i < SW.pts.length));
+}
+function swOpen() {
+  closeSheets(); if (state === "locked") exitFrozen();
+  if (!video.videoWidth) { alertMsg("Start the camera first."); return; }
+  if (!sensorsOK) { alertMsg("The tilt sensor isn't active. Restart the app and allow motion access."); return; }
+  SW.on = false; SW.pts = []; state = "sweep";
+  $("sweep").hidden = false; $("swGo").textContent = "Start"; $("swGo").disabled = false;
+  swUI("Aim the crosshair at a small, sharp point at least <b>20 m (65 ft) away</b>: a window corner, a sign or a lamp post. Through a window is fine. Hold the phone upright, then tap <b>Start</b>.", 0);
+}
+function alertMsg(t) { $("sweep").hidden = false; $("swGo").disabled = true; swUI(t, 0); state = "sweep"; }
+function swClose() { SW.on = false; $("sweep").hidden = true; state = "live"; liveSeed = null; }
+$("sQuickCal").onclick = swOpen;
+$("swCancel").onclick = swClose;
+$("swGo").onclick = () => {
+  if ($("swGo").textContent === "Done") { swClose(); return; }
+  SW.src = video; SW.w = video.videoWidth; SW.h = video.videoHeight; SW.x = SW.w / 2; SW.y = SW.h / 2;
+  const t = swTemplate(SW.x, SW.y);
+  if (t.sd < 10) { swUI("Not enough detail at the crosshair. Pick a point with sharp contrast (a dark corner against a bright sky works well), then tap Start.", 0); return; }
+  SW.T = t.T; SW.Tn = t.norm; SW.pts = []; SW.lost = 0; SW.ylog = []; SW.on = true; SW.key = camKey; SW.zoom = hwZoom();
+  $("swGo").textContent = "Restart";
+  swUI("Hold still…", 0);
+};
+function swTick() {
+  if (!SW.on || state !== "sweep" || !video.videoWidth) return;
+  const m = swTrack(), now = performance.now();
+  const mp = liveMap(), d = devicePixelRatio || 1; octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, innerWidth, innerHeight);
+  if (m.s < .6) { if (++SW.lost > 6) swUI("Lost the point. Tilt back until it's inside the green box, or tap Restart.", null); }
+  else { SW.lost = 0; SW.x = m.x; SW.y = m.y; }
+  const [bx, by] = mp.toScr(SW.x, SW.y), hb = TW / SW.k / 2 * mp.s;
+  octx.strokeStyle = m.s >= .6 ? "#6fd640" : "#ffc04d"; octx.lineWidth = 2; octx.strokeRect(bx - hb, by - hb, 2 * hb, 2 * hb);
+  if (m.s < .85) return;
+  SW.ylog.push([now, m.y]); while (SW.ylog.length && now - SW.ylog[0][0] > 450) SW.ylog.shift();
+  const recent = pBuf.filter(q => now - q[0] < 450).map(q => q[1]);
+  if (recent.length < 6 || SW.ylog.length < 3) return;
+  const still = sd(recent) < .08 && sd(SW.ylog.map(q => q[1])) < 1.5, p = mean(recent), y = mean(SW.ylog.map(q => q[1]));
+  const last = SW.pts.at(-1);
+  if (tilt > 5) { swUI(`Keep the phone upright (it's rolled ${Math.round(tilt)}°).`, null); return; }
+  if (still && (!last || Math.abs(p - last.p) > 3)) {
+    if (y < SW.h * .06 || y > SW.h * .94) { swUI("That's far enough: the point is at the edge. Tilt back a little the other way.", null); return; }
+    SW.pts.push({ p, y }); try { navigator.vibrate && navigator.vibrate(40); } catch (e) {}
+    const span = Math.max(...SW.pts.map(q => q.p)) - Math.min(...SW.pts.map(q => q.p));
+    if (SW.pts.length >= 5 && span >= 14) return swFinish();
+    swUI(SW.pts.length === 1 ? "Got it. Now <b>tilt the phone down</b> a little (the point moves up the screen) and hold still. Keep the point in the green box."
+      : `Point ${SW.pts.length} of 5 ✓. Tilt down a bit more and hold still. ${span < 14 ? `Total tilt so far ${span.toFixed(0)}°: aim for at least 14°.` : ""}`, Math.min(SW.pts.length / 5, span / 14));
+  }
+}
+setInterval(swTick, 100);
+function swFinish() {
+  SW.on = false;
+  const r = swFit(SW.pts, SW.h / 2, focalPx({ key: SW.key, w: SW.w, h: SW.h, zoom: SW.zoom }));
+  const fn = r.f / (Math.max(SW.w, SW.h) * (SW.zoom || 1)), fov = 2 * Math.atan(.5 / fn) / DEG;
+  if (!(fov > 8 && fov < 120) || !(r.rel < .02)) {
+    $("swGo").textContent = "Restart";
+    swUI(`That run wasn't consistent enough (${isFinite(r.rel) ? "±" + (100 * r.rel).toFixed(1) + "%" : "no fit"}). Use a point further away, hold still at each step, and tap Restart.`, 0); return;
+  }
+  calib[SW.key] = fn; save("ps2_calib", calib); renderStatus(); renderCalInfo();
+  $("swGo").textContent = "Done";
+  swUI(`<b>Lens calibrated ✓</b> ${fov.toFixed(1)}° field of view, fit ±${(100 * r.rel).toFixed(1)}%. Run it again any time; the latest result is used. For the most accuracy, confirm with a laser on the course.`, 1);
+}
+window.PS_SW = { swFit, swTemplate, swTrack, SW };
 
 // ================= tilt calibration =================
 let tiltTimer = null;

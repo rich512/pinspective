@@ -135,9 +135,47 @@ textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);bo
 .sweep .dots{display:flex;gap:6px;margin:10px 0 2px}
 .sweep .dots b{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-size:12px;color:var(--mut)}
 .sweep .dots b.on{background:var(--green2);border-color:transparent;color:#000}
+#mapWrap{position:fixed;left:0;right:0;z-index:6;display:none;background:#0a1410}
+#map{position:absolute;inset:0}
+body.v-split #stage{bottom:auto;height:40%}
+body.v-split #mapWrap{display:block;top:40%;bottom:var(--pc,190px);border-top:2px solid var(--green2)}
+body.v-map #mapWrap{display:block;top:0;bottom:0}
+body.v-map #stage{visibility:hidden}
+body.v-map #panel,body.v-map #sideCtl,body.v-map #hzRow,body.v-map #frozenCtl,body.v-map #toptip{display:none!important}
+body.v-split .stats3,body.v-split .club,body.v-split #sideCtl,body.v-split #hzRow,body.v-split #toptip,body.v-split .confrow #pWarn{display:none!important}
+body.v-split .pv{font-size:36px}
+body.v-split #reticle{width:110px;height:110px}
+body.v-split #retLabel{top:calc(50% + 62px)}
+body.v-split #frozenCtl{top:calc(var(--st) + 64px);gap:4px}
+body.v-split #frozenCtl .btn{padding:6px 0;width:46px;font-size:13px}
+.mcard{position:absolute;left:10px;right:10px;bottom:10px;z-index:500;background:rgba(0,14,12,.92);border:1px solid var(--line);border-radius:14px;padding:10px 12px;font-size:13px}
+body.v-map .mcard{bottom:calc(var(--sb) + 12px)}
+body.v-map #mapWrap .leaflet-top{top:calc(var(--st) + 56px)}
+.mcard .row2{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
+.mcard .big2{font-size:30px;font-weight:850;line-height:1}
+.mcard .big2 small{font-size:13px;color:var(--lime);margin-left:2px}
+.mcard .k{margin-bottom:3px}
+.mcard .sub{color:var(--mut);font-size:12px;margin-top:6px}
+body.v-split .mcard{padding:7px 10px;left:8px;right:64px;bottom:8px}
+body.v-split .mcard .big2{font-size:22px}
+body.v-split .mcard .big2 small{font-size:11px}
+body.v-split .mcard .sub{display:none}
+body.v-split .mcard .row2{gap:12px;flex-wrap:nowrap}
+body.v-split .mcard .k{font-size:9.5px;letter-spacing:.6px}
+body.v-split .mcard .clb{font-size:14px!important}
+body.v-split .mbtns{top:8px;right:8px}
+body.v-split .mbtns .ib{width:34px;height:34px}
+.mbtns{position:absolute;right:10px;top:10px;z-index:500;display:flex;flex-direction:column;gap:8px}
+body.v-map .mbtns{top:calc(var(--st) + 60px)}
+.lbl-d{background:rgba(0,0,0,.75);color:#fff;border-radius:999px;padding:2px 8px;font:800 12px/1.4 -apple-system,system-ui,sans-serif;white-space:nowrap;border:1px solid rgba(255,255,255,.35);transform:translate(-50%,-50%);display:inline-block}
+.leaflet-container{background:#0a1410;font:inherit}
+.leaflet-control-attribution{font-size:9px!important;background:rgba(0,0,0,.5)!important;color:#ccc!important}
+.leaflet-control-attribution a{color:#ddd!important}
 #rotate{display:none;position:fixed;inset:0;z-index:99;background:var(--bg);align-items:center;justify-content:center;text-align:center;padding:30px;font-size:18px}
 @media (orientation:landscape) and (max-height:520px){#rotate{display:flex}}
 </style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 </head>
 <body>
 
@@ -159,10 +197,16 @@ textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);bo
 
 <header class="top">
   <div class="hchips"><span class="chip" id="hWind">Wind —</span><span class="chip" id="hTemp">—°</span><span class="chip" id="hStatus">Optical</span></div>
+  <button class="ib" id="navView" aria-label="Camera, split or map view">◫</button>
   <button class="ib" id="navBag" aria-label="Bag">⛳</button>
   <button class="ib" id="navTest" aria-label="Accuracy test">◎</button>
   <button class="ib" id="navSet" aria-label="Settings">⚙︎</button>
 </header>
+
+<div id="mapWrap"><div id="map"></div>
+  <div class="mbtns"><button class="ib" id="mapMe" aria-label="Centre on me">◎</button><button class="ib" id="mapClear" aria-label="Clear target">✕</button></div>
+  <div class="mcard" id="mapCard"></div>
+</div>
 
 <div id="sideCtl">
   <button class="zb on" data-z="1">1×</button>
@@ -355,6 +399,8 @@ textarea{width:100%;height:160px;background:#000;border:1px solid var(--line);bo
 
 <script>
 "use strict";
+function stW() { return $("stage").clientWidth || window.innerWidth; }
+function stH() { return $("stage").clientHeight || window.innerHeight; }
 const $ = id => document.getElementById(id);
 const DEG = Math.PI / 180, M2YD = 1.0936133, M2FT = 3.2808399;
 const DEFAULT_FNORM = 0.5 / Math.tan(33.5 * DEG); // ~67° across the long side (typical 1× main camera)
@@ -454,7 +500,7 @@ document.querySelectorAll(".zb").forEach(b => b.onclick = () => {
 
 // screen <-> image mapping for the live (cover-fit, digitally zoomed) video
 function liveMap() {
-  const w = video.videoWidth, h = video.videoHeight, W = innerWidth, H = innerHeight;
+  const w = video.videoWidth, h = video.videoHeight, W = stW(), H = stH();
   const s = Math.max(W / w, H / h) * dzoom;
   return { w, h, s, toScr: (ix, iy) => [(ix - w / 2) * s + W / 2, (iy - h / 2) * s + H / 2], toImg: (sx, sy) => [(sx - W / 2) / s + w / 2, (sy - H / 2) / s + h / 2] };
 }
@@ -726,7 +772,7 @@ function renderStatus() {
 
 // ================= live loop =================
 const ov = $("ov"), octx = ov.getContext("2d");
-function sizeOv() { const d = devicePixelRatio || 1; ov.width = innerWidth * d; ov.height = innerHeight * d; }
+function sizeOv() { const d = devicePixelRatio || 1; ov.width = stW() * d; ov.height = stH() * d; }
 function liveTick() {
   if (state !== "live" || !video.videoWidth || $("start").hidden === false) return;
   const mp = liveMap();
@@ -748,7 +794,7 @@ function liveTick() {
 let lastLiveMs = 0;
 setInterval(liveTick, 250);
 function drawOverlay(mp, seed) {
-  const d = devicePixelRatio || 1; octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, innerWidth, innerHeight);
+  const d = devicePixelRatio || 1; octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, stW(), stH());
   if (liveSeed) { const [x, y] = mp.toScr(seed[0], seed[1]); octx.strokeStyle = "#fff"; octx.lineWidth = 1.5; octx.beginPath(); octx.arc(x, y, 9, 0, 7); octx.stroke(); }
   if (!liveDet) return;
   const [x0, y0] = mp.toScr(liveDet.x, liveDet.yTop), [, y1] = mp.toScr(liveDet.x, liveDet.yBot);
@@ -762,8 +808,9 @@ function drawOverlay(mp, seed) {
 $("tapLayer").addEventListener("click", e => {
   if (state !== "live" || !video.videoWidth) return;
   const mp = liveMap(), p = mp.toImg(e.clientX, e.clientY);
-  const W = innerWidth, H = innerHeight;
+  const W = stW(), H = stH();
   liveSeed = (Math.hypot(e.clientX - W / 2, e.clientY - H / 2) < 40) ? null : p; // tap the centre to reset
+  if (liveSeed) cameraTapToMap(p, mp); else clearRay();
 });
 
 // ================= measure (multi-frame burst) =================
@@ -814,10 +861,10 @@ $("photoIn").onchange = e => {
 };
 
 // ================= frozen view =================
-function sizeCv() { const d = devicePixelRatio || 1; cv.width = Math.round(innerWidth * d); cv.height = Math.round(innerHeight * d); }
+function sizeCv() { const d = devicePixelRatio || 1; cv.width = Math.round(stW() * d); cv.height = Math.round(stH() * d); }
 function enterFrozen(det) {
   state = "locked"; sizeCv();
-  const W = innerWidth, H = innerHeight, cover = Math.max(W / shot.w, H / shot.h);
+  const W = stW(), H = stH(), cover = Math.max(W / shot.w, H / shot.h);
   const cx = det ? det.x : shot.w / 2, cy = det ? (det.yTop + det.yBot) / 2 : shot.h / 2;
   const span = det ? det.yBot - det.yTop : 60 / (cover * 3);
   vw.sc = Math.min(40, Math.max(cover * dzoom, (H * .28) / span));
@@ -837,10 +884,15 @@ function exitFrozen() {
   $("actLive").hidden = false; $("actLocked").hidden = true;
 }
 $("newBtn").onclick = exitFrozen;
-function refresh() { if (state === "locked") renderPanel(shot && shot.frames.length ? measure(shot) : null, shot, "locked"); }
+function refresh() {
+  if (state !== "locked") return;
+  const m = shot && shot.frames.length ? measure(shot) : null;
+  renderPanel(m, shot, "locked");
+  if (m) pinFromCamera(m, shot);
+}
 function draw() {
   if (!frame) return;
-  const d = devicePixelRatio || 1, W = innerWidth;
+  const d = devicePixelRatio || 1, W = stW();
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.setTransform(d * vw.sc, 0, 0, d * vw.sc, d * vw.ox, d * vw.oy); ctx.imageSmoothingEnabled = vw.sc < 3; ctx.drawImage(frame, 0, 0);
   ctx.setTransform(d, 0, 0, d, 0, 0);
@@ -869,10 +921,10 @@ function redetectAt(ix, iy) {
   }
   draw(); refresh();
 }
-$("autoBtn").onclick = () => redetectAt((innerWidth / 2 - vw.ox) / vw.sc, (innerHeight * .36 - vw.oy) / vw.sc);
+$("autoBtn").onclick = () => redetectAt((stW() / 2 - vw.ox) / vw.sc, (stH() * .36 - vw.oy) / vw.sc);
 
 const ptrs = new Map(); let drag = null, pan = null, pinch = null, tap = null;
-const clampSc = s => Math.min(Math.max(s, Math.max(innerWidth / shot.w, innerHeight / shot.h) * .5), 60);
+const clampSc = s => Math.min(Math.max(s, Math.max(stW() / shot.w, stH() / shot.h) * .5), 60);
 cv.addEventListener("pointerdown", e => {
   cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (ptrs.size === 1) {
@@ -910,7 +962,7 @@ cv.addEventListener("wheel", e => {
   e.preventDefault(); const ix = (e.clientX - vw.ox) / vw.sc, iy = (e.clientY - vw.oy) / vw.sc;
   vw.sc = clampSc(vw.sc * Math.exp(-e.deltaY * .002)); vw.ox = e.clientX - ix * vw.sc; vw.oy = e.clientY - iy * vw.sc; draw();
 }, { passive: false });
-addEventListener("resize", () => { sizeOv(); placeHz(); if (frame) { sizeCv(); draw(); } });
+addEventListener("resize", () => { sizeOv(); placeHz(); if (frame) { sizeCv(); draw(); } layoutView(); });
 function placeHz() { const p = $("panel"); $("hzRow").style.bottom = (p.offsetHeight + 10) + "px"; }
 
 // ================= lens calibration =================
@@ -937,6 +989,144 @@ function renderCalInfo() {
 }
 $("sCalReset").onclick = () => { delete calib[camKey]; save("ps2_calib", calib); renderCalInfo(); renderStatus(); };
 
+
+
+// ================= overhead map + GPS =================
+// Satellite view beside the camera. Tap anywhere on the map for GPS distance (and distance on
+// to the pin). A camera-ranged pin is placed at its measured distance along the compass
+// bearing; drag it onto the green and it slides along that distance (the compass is the weak part).
+const R_E = 6371008.8;
+let viewMode = "cam", map = null, gps = null, gpsWatch = null, ML = {}, pinGeo = null, tgt = null, rayInfo = null, elevCache = {};
+function hav(a, b) { const dLa = (b.lat - a.lat) * DEG, dLo = (b.lon - a.lon) * DEG, s2 = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * DEG) * Math.cos(b.lat * DEG) * Math.sin(dLo / 2) ** 2; return 2 * R_E * Math.asin(Math.sqrt(s2)); }
+function brg(a, b) { const p1 = a.lat * DEG, p2 = b.lat * DEG, dl = (b.lon - a.lon) * DEG; return (Math.atan2(Math.sin(dl) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl)) / DEG + 360) % 360; }
+function dest(a, b, d) { const dl = d / R_E, t = b * DEG, p1 = a.lat * DEG, l1 = a.lon * DEG;
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(dl) + Math.cos(p1) * Math.sin(dl) * Math.cos(t));
+  return { lat: p2 / DEG, lon: (l1 + Math.atan2(Math.sin(t) * Math.sin(dl) * Math.cos(p1), Math.cos(dl) - Math.sin(p1) * Math.sin(p2))) / DEG }; }
+const LL = p => [p.lat, p.lon];
+function startGpsWatch() {
+  if (!navigator.geolocation || gpsWatch != null) return;
+  gpsWatch = navigator.geolocation.watchPosition(p => {
+    const first = !gps;
+    gps = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, alt: p.coords.altitude };
+    if (!geo) { geo = { lat: gps.lat, lon: gps.lon, alt: gps.alt }; fetchWeather(); }
+    if (map) { drawYou(); if (first) map.setView(LL(gps), 18); drawTarget(); }
+  }, () => renderCard(), { enableHighAccuracy: true, maximumAge: 1000, timeout: 30000 });
+}
+function divI(html, size) { return L.divIcon({ className: "", html, iconSize: size, iconAnchor: [size[0] / 2, size[1] / 2] }); }
+function ensureMap() {
+  if (map) { map.invalidateSize(); return true; }
+  if (typeof L === "undefined") { $("mapCard").innerHTML = "The map couldn't load. Check your connection and reopen the app."; return false; }
+  map = L.map("map", { zoomControl: false, attributionControl: true, maxZoom: 21 }).setView(gps ? LL(gps) : [43.65, -79.38], gps ? 18 : 15);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 21, maxNativeZoom: 19, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }).addTo(map);
+  map.on("click", e => { setTarget({ lat: e.latlng.lat, lon: e.latlng.lng }, "map"); });
+  drawYou(); drawPin(); drawTarget();
+  return true;
+}
+function drawYou() {
+  if (!map || !gps) return;
+  const icon = divI(`<div style="width:22px;height:22px;position:relative"><div id="youArrow" style="position:absolute;left:3px;top:-10px;width:16px;height:22px;transform-origin:8px 21px;${heading == null ? "display:none" : ""}"><svg viewBox="0 0 16 22" width="16" height="22"><path d="M8 0L15 14H1Z" fill="#4fc8ff" fill-opacity=".7"/></svg></div><div style="position:absolute;inset:3px;border-radius:50%;background:#4fc8ff;border:3px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.4)"></div></div>`, [22, 22]);
+  if (!ML.you) { ML.you = L.marker(LL(gps), { icon, interactive: false, zIndexOffset: 1000 }).addTo(map); ML.acc = L.circle(LL(gps), { radius: gps.acc, color: "#4fc8ff", weight: 1, fillOpacity: .12, interactive: false }).addTo(map); }
+  else { ML.you.setLatLng(LL(gps)); ML.acc.setLatLng(LL(gps)).setRadius(gps.acc); }
+}
+setInterval(() => { if (viewMode === "split") document.body.style.setProperty("--pc", $("panel").offsetHeight + "px"); }, 400);
+setInterval(() => { const a = document.getElementById("youArrow"); if (a && heading != null) { a.style.display = ""; a.style.transform = `rotate(${heading}deg)`; } }, 300);
+function pinFromCamera(m, s) {
+  if (!gps) return;
+  const f = focalPx(s), xs = s.frames.map(fr => fr.x).filter(x => x != null);
+  const xoff = xs.length ? Math.atan((median(xs) - s.w / 2) / f) / DEG : 0;
+  const keep = pinGeo && pinGeo.shotRef === s && pinGeo.userB;
+  pinGeo = { from: keep ? pinGeo.from : { lat: gps.lat, lon: gps.lon }, d: m.X, b: keep ? pinGeo.b : (s.heading != null ? (s.heading + xoff + 360) % 360 : 0),
+    userB: keep, guessed: !keep && s.heading == null, shotRef: s };
+  if (map) { drawPin(); drawTarget(); }
+}
+function pinPos() { return pinGeo ? dest(pinGeo.from, pinGeo.b, pinGeo.d) : null; }
+function drawPin() {
+  if (!map) return;
+  if (ML.pin) { map.removeLayer(ML.pin); ML.pin = null; } if (ML.ring) { map.removeLayer(ML.ring); ML.ring = null; }
+  if (!pinGeo) return;
+  const icon = divI(`<svg viewBox="0 0 30 40" width="30" height="40"><rect x="7" y="4" width="2.6" height="34" rx="1.3" fill="#fff"/><path d="M9.6 4.5C15 5 20 6.5 26 9.5C21 12 15 13 9.6 15Z" fill="#ff3b30"/><ellipse cx="8.3" cy="37.5" rx="5" ry="1.8" fill="rgba(0,0,0,.5)"/></svg>`, [30, 40]);
+  icon.options.iconAnchor = [8, 38];
+  ML.ring = L.circle(LL(pinGeo.from), { radius: pinGeo.d, color: "#ff5b4f", weight: 1, dashArray: "4 6", fill: false, interactive: false, opacity: pinGeo.guessed ? .9 : .45 }).addTo(map);
+  ML.pin = L.marker(LL(pinPos()), { icon, draggable: true, zIndexOffset: 900 }).addTo(map);
+  ML.pin.bindTooltip(`Pin ${fD(pinGeo.d)} ${dU()} · camera${pinGeo.guessed ? " · drag onto the green" : ""}`, { direction: "top", offset: [0, -34], permanent: true, className: "" });
+  ML.pin.on("drag", e => { const ll = e.target.getLatLng(); pinGeo.b = brg(pinGeo.from, { lat: ll.lat, lon: ll.lng }); pinGeo.userB = true; pinGeo.guessed = false; e.target.setLatLng(LL(pinPos())); drawTarget(true); });
+  ML.pin.on("dragend", () => { drawPin(); drawTarget(); });
+}
+function setTarget(p, src, note) { tgt = { lat: p.lat, lon: p.lon, src, note }; if (src === "map") clearRay(true); drawTarget(); fetchElev(); }
+function clearTarget() { tgt = null; clearRay(); drawTarget(); }
+function clearRay(keepInfo) { if (ML.ray) { map && map.removeLayer(ML.ray); ML.ray = null; } if (!keepInfo) rayInfo = null; }
+function lbl(a, b, text) { const mid = { lat: (a.lat + b.lat) / 2, lon: (a.lon + b.lon) / 2 }; return L.marker(LL(mid), { icon: L.divIcon({ className: "", html: `<span class="lbl-d">${text}</span>`, iconSize: [0, 0] }), interactive: false }); }
+function drawTarget(fast) {
+  if (!map) { renderCard(); return; }
+  ["tLine", "pLine", "tMk", "tL1", "tL2"].forEach(k => { if (ML[k]) { map.removeLayer(ML[k]); ML[k] = null; } });
+  const pp = pinPos();
+  if (tgt && gps) {
+    ML.tLine = L.polyline([LL(gps), LL(tgt)], { color: "#fff", weight: 2.5, opacity: .9, interactive: false }).addTo(map);
+    ML.tMk = L.marker(LL(tgt), { icon: divI('<div style="width:22px;height:22px;border-radius:50%;border:3px solid #fff;background:rgba(111,214,64,.85);box-shadow:0 0 0 2px rgba(0,0,0,.45)"></div>', [22, 22]), interactive: false, zIndexOffset: 800 }).addTo(map);
+    ML.tL1 = lbl(gps, tgt, `${fD(hav(gps, tgt))}`).addTo(map);
+    if (pp) { ML.pLine = L.polyline([LL(tgt), LL(pp)], { color: "#ffd84d", weight: 2, dashArray: "6 6", interactive: false }).addTo(map); ML.tL2 = lbl(tgt, pp, `${fD(hav(tgt, pp))}`).addTo(map); }
+  }
+  if (!fast) renderCard();
+}
+async function fetchElev() {
+  if (!tgt || !gps) return;
+  const pts = [gps, tgt], key = p => p.lat.toFixed(4) + "," + p.lon.toFixed(4), need = pts.filter(p => elevCache[key(p)] == null);
+  if (need.length) {
+    try {
+      const u = `https://api.open-meteo.com/v1/elevation?latitude=${need.map(p => p.lat.toFixed(5)).join(",")}&longitude=${need.map(p => p.lon.toFixed(5)).join(",")}`;
+      const j = await (await fetch(u)).json(); need.forEach((p, i) => elevCache[key(p)] = j.elevation[i]);
+    } catch (e) {}
+  }
+  const a = elevCache[key(gps)], b = elevCache[key(tgt)];
+  if (tgt && a != null && b != null) tgt.dz = b - a;
+  renderCard();
+}
+function renderCard() {
+  const c = $("mapCard"); if (!c) return;
+  if (!gps) { c.innerHTML = '<div class="k">Map</div>Waiting for GPS. Allow location access and stand in the open.'; return; }
+  const acc = `GPS ±${Math.max(1, Math.round(toD(gps.acc)))} ${dU()}`;
+  if (!tgt) {
+    const pp = pinPos();
+    c.innerHTML = `<div class="k">Tap anywhere on the hole</div><div>Distance from you, and on to the pin.${pp ? ` Pin: <b>${fD(hav(gps, pp))} ${dU()}</b> (camera).` : " Range the flag with the camera and it appears here."}</div>
+      ${rayInfo ? `<div class="sub">${rayInfo}</div>` : ""}<div class="sub">${acc}</div>`; return;
+  }
+  const d = hav(gps, tgt), pp = pinPos(), dp = pp ? hav(tgt, pp) : null;
+  let plays = "";
+  if (!S.tour) {
+    const m = { X: d, dz: tgt.dz != null ? tgt.dz : null, sigX: gps.acc, sigDz: 3 };
+    const pl = playsLike(m, brg(gps, tgt)), c2 = pickClub(pl.total);
+    const parts = []; if (pl.slope) parts.push(`elev ${fH(tgt.dz)} → ${sD(pl.slope.a)}`); if (pl.wind && !pl.wind.unknown) parts.push(`wind ${sD(pl.wind.a)}`); if (pl.air) parts.push(`air ${sD(pl.air.a)}`);
+    plays = `<div><div class="k">Plays like <span class="tag e">EST</span></div><div class="big2">${fD(pl.total)}<small>${dU()}</small></div></div>
+      ${c2 ? `<div><div class="k">Club</div><div class="clb" style="font-size:18px;font-weight:800;white-space:nowrap">${c2.name}</div></div>` : ""}`;
+    if (parts.length) plays += `<div class="sub" style="flex-basis:100%;margin-top:0">${parts.join(" · ")}</div>`;
+  }
+  c.innerHTML = `<div class="row2"><div><div class="k">To target <span class="tag s">GPS</span></div><div class="big2">${fD(d)}<small>${dU()}</small></div></div>
+    ${dp != null ? `<div><div class="k">Target → pin</div><div class="big2">${fD(dp)}<small>${dU()}</small></div></div>` : ""}${plays}</div>
+    ${tgt.note ? `<div class="sub">${tgt.note}</div>` : ""}<div class="sub">${acc}${tgt.dz != null && !S.tour ? " · elevation from terrain data, ±3 m" : ""}${S.tour ? " · Tournament mode: distance only" : ""}</div>`;
+}
+function cameraTapToMap(p, mp) {
+  if (!gps) return;
+  if (heading == null) { rayInfo = "No compass reading, so a camera tap can't be placed on the map. Tap the map instead."; renderCard(); return; }
+  const f = focalPx({ key: camKey, w: mp.w, h: mp.h, zoom: hwZoom() });
+  const b = (heading + Math.atan((p[0] - mp.w / 2) / f) / DEG + 360) % 360;
+  const dep = -(pitchNow() + Math.atan((mp.h / 2 - p[1]) / f) / DEG);
+  if (map) { clearRay(); ML.ray = L.polyline([LL(gps), LL(dest(gps, b, 500))], { color: "#fff", weight: 1.5, dashArray: "3 7", opacity: .9, interactive: false }).addTo(map); }
+  if (sensorsOK && dep > .8) {
+    const d = Math.min(400, S.camH / Math.tan(dep * DEG));
+    rayInfo = null;
+    setTarget(dest(gps, b, d), "camera", "Rough estimate from the camera angle, assuming flat ground (±20% or worse beyond 40 yd). Tap the exact spot along the dotted line on the map.");
+  } else { rayInfo = "Aim line drawn from your camera tap. Tap the exact spot along the dotted line on the map."; tgt = null; drawTarget(); }
+}
+function layoutView() {
+  document.body.classList.toggle("v-split", viewMode === "split"); document.body.classList.toggle("v-map", viewMode === "map");
+  $("navView").textContent = viewMode === "cam" ? "◫" : viewMode === "split" ? "🗺" : "📷";
+  if (viewMode !== "cam") { document.body.style.setProperty("--pc", $("panel").offsetHeight + "px"); ensureMap(); setTimeout(() => map && map.invalidateSize(), 60); }
+  sizeOv(); placeHz(); if (frame) { sizeCv(); draw(); }
+}
+$("navView").onclick = () => { viewMode = viewMode === "cam" ? "split" : viewMode === "split" ? "map" : "cam"; layoutView(); renderCard(); };
+$("mapMe").onclick = () => { if (map && gps) map.setView(LL(gps), Math.max(map.getZoom(), 18)); };
+$("mapClear").onclick = clearTarget;
 
 // ================= quick lens calibration (tilt sweep) =================
 // Hold a distant point in the crosshair, then tilt the phone in steps. The point's movement
@@ -1007,7 +1197,7 @@ function swOpen() {
   swUI("Aim the crosshair at a small, sharp point at least <b>20 m (65 ft) away</b>: a window corner, a sign or a lamp post. Through a window is fine. Hold the phone upright, then tap <b>Start</b>.", 0);
 }
 function alertMsg(t) { $("panel").hidden = true; $("sweep").hidden = false; $("swGo").disabled = true; swUI(t, 0); state = "sweep"; }
-function swClose() { SW.on = false; $("sweep").hidden = true; $("panel").hidden = false; $("retLabel").hidden = false; state = "live"; liveSeed = null; const d = devicePixelRatio || 1; octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, innerWidth, innerHeight); }
+function swClose() { SW.on = false; $("sweep").hidden = true; $("panel").hidden = false; $("retLabel").hidden = false; state = "live"; liveSeed = null; const d = devicePixelRatio || 1; octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, stW(), stH()); }
 $("sQuickCal").onclick = swOpen;
 $("swCancel").onclick = swClose;
 $("swGo").onclick = () => {
@@ -1022,7 +1212,7 @@ $("swGo").onclick = () => {
 function swTick() {
   if (!SW.on || state !== "sweep" || !video.videoWidth) return;
   const m = swTrack(), now = performance.now();
-  const mp = liveMap(), d = devicePixelRatio || 1; octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, innerWidth, innerHeight);
+  const mp = liveMap(), d = devicePixelRatio || 1; octx.setTransform(d, 0, 0, d, 0, 0); octx.clearRect(0, 0, stW(), stH());
   if (m.s < .6) { if (++SW.lost > 6) swUI("Lost the point. Tilt back until it's inside the green box, or tap Restart.", null); }
   else { SW.lost = 0; SW.x = m.x; SW.y = m.y; }
   const [bx, by] = mp.toScr(SW.x, SW.y), hb = TW / SW.k / 2 * mp.s;
@@ -1187,7 +1377,7 @@ $("startBtn").onclick = async () => {
   addEventListener("deviceorientation", onOrient); addEventListener("deviceorientationabsolute", onOrient); addEventListener("devicemotion", onMotion);
   if (!window.isSecureContext || !navigator.mediaDevices) { $("startErr").textContent = "The camera needs a secure https:// link. Open the app from its hosted address, not as a local file."; return; }
   try { await startCam(); } catch (e) { $("startErr").textContent = `Camera unavailable (${e.name || e.message}). Allow camera access in your browser settings, or use Photo.`; }
-  getLocation();
+  getLocation(); startGpsWatch();
   try { if (navigator.wakeLock) await navigator.wakeLock.request("screen"); } catch (e) {}
   $("start").hidden = true; sizeOv(); placeHz();
 };
